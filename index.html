@@ -197,7 +197,7 @@
   <header>
     <div>
       <h1>Dale - DidWell Weather Services</h1>
-      <div id="locationSub" class="sub">59,08103°N · 5,72075°E · høyde hentes · 7 døgn · v1.28 · oppdateres automatisk når siden åpnes</div>
+      <div id="locationSub" class="sub">59,08103°N · 5,72075°E · høyde hentes · 7 døgn · v1.29 · oppdateres automatisk når siden åpnes</div>
     </div>
     <div class="actions">
       <button id="refreshBtn" type="button">Oppdater</button>
@@ -309,6 +309,32 @@
     </div>
   </section>
 
+  <div class="section-title">Maritimt</div>
+  <section class="cards">
+    <div class="card">
+      <div class="metric-grid">
+        <div class="metric"><div class="label">Bølgehøyde nå</div><div id="waveNow" class="value">–</div></div>
+        <div class="metric"><div class="label">Maks i dag</div><div id="waveMax" class="value">–</div></div>
+      </div>
+      <div id="waveDetail" class="detail">nærmeste sjøcelle</div>
+    </div>
+    <div class="card">
+      <div class="metric-grid">
+        <div class="metric"><div class="label">Sjøtemperatur</div><div id="seaTemp" class="value">–</div></div>
+        <div class="metric"><div class="label">Bølgeperiode</div><div id="wavePeriod" class="value">–</div></div>
+      </div>
+      <div id="marineCell" class="detail">modellert marindata</div>
+    </div>
+    <div class="card">
+      <div class="metric-grid">
+        <div class="metric"><div class="label">Neste flo</div><div id="nextHigh" class="value">–</div></div>
+        <div class="metric"><div class="label">Neste fjære</div><div id="nextLow" class="value">–</div></div>
+      </div>
+      <div id="tideDetail" class="detail">vannstand over sjøkartnull</div>
+    </div>
+  </section>
+  <div class="note">Bølgeverdiene kommer fra nærmeste tilgjengelige sjøcelle og kan avvike inne i skjermet skjærgård. Tidevann og vannstand er modellert av Kartverket for posisjonen. Dataene er veiledende og skal ikke brukes som eneste grunnlag for navigasjon.</div>
+
   <section class="grid">
     <div class="panel">
       <h2>Temperatur</h2>
@@ -348,6 +374,7 @@
     Data leveres via <a href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo</a>.
     Modellkilder: ECMWF, NOAA/NCEP, DWD, Environment and Climate Change Canada, Météo-France, MET Norway, DMI, UK Met Office og KNMI.
     Denne siden bruker råmodellene der det er praktisk mulig, slik at korttidsmodellene ikke kunstig forlenges med en annen leverandørs modell.
+    Marindata leveres via Open-Meteo med modellkilder fra blant andre DWD og ECMWF. Tidevann og vannstand: Kartverket, CC BY 4.0.
   </footer>
 </div>
 
@@ -655,7 +682,7 @@
 
     const elevation = Number(data.elevation);
     if(finite(elevation)){
-      $('locationSub').textContent = `59,08103°N · 5,72075°E · ${Math.round(elevation)} moh. · 7 døgn · v1.28 · oppdateres automatisk når siden åpnes`;
+      $('locationSub').textContent = `59,08103°N · 5,72075°E · ${Math.round(elevation)} moh. · 7 døgn · v1.29 · oppdateres automatisk når siden åpnes`;
     }
 
     const current = data.current || {};
@@ -695,6 +722,85 @@
 
     $('daylightDetail').textContent =
       `Dagslys ${daylightText} · soltimer ${sunshineText}`;
+  }
+
+  async function fetchMarine(){
+    const params=new URLSearchParams({
+      latitude:LAT,longitude:LON,timezone:'Europe/Oslo',forecast_days:'7',cell_selection:'sea',
+      current:'wave_height,wave_direction,wave_period,sea_surface_temperature',
+      hourly:'wave_height,wave_direction,wave_period,sea_surface_temperature',
+      daily:'wave_height_max,wave_direction_dominant,wave_period_max'
+    });
+    const res=await fetch(`https://marine-api.open-meteo.com/v1/marine?${params.toString()}`,{cache:'no-store'});
+    if(!res.ok)throw new Error(`marindata HTTP ${res.status}`);
+    return await res.json();
+  }
+
+  function renderMarine(data){
+    const c=data?.current||{},d=data?.daily||{};
+    $('waveNow').textContent=finite(c.wave_height)?`${fmt(c.wave_height,1)} m`:'–';
+    $('waveMax').textContent=finite(d.wave_height_max?.[0])?`${fmt(d.wave_height_max[0],1)} m`:'–';
+    $('seaTemp').textContent=finite(c.sea_surface_temperature)?`${fmt(c.sea_surface_temperature,1)} °C`:'–';
+    $('wavePeriod').textContent=finite(c.wave_period)?`${fmt(c.wave_period,1)} s`:'–';
+    $('waveDetail').textContent=finite(c.wave_direction)
+      ? `Fra ${cardinal(c.wave_direction)} ${fmt(c.wave_direction,0)}° · nærmeste sjøcelle`
+      : 'nærmeste sjøcelle';
+    const usedLat=Number(data?.latitude),usedLon=Number(data?.longitude);
+    $('marineCell').textContent=finite(usedLat)&&finite(usedLon)
+      ? `Modellcelle: ${fmt(usedLat,3)}°N, ${fmt(usedLon,3)}°E`
+      : 'modellert marindata';
+  }
+
+  function tideRange(){
+    const today=osloHourKey().slice(0,10);
+    const end=new Date(today+'T12:00:00Z');end.setUTCDate(end.getUTCDate()+2);
+    return {from:`${today}T00:00`,to:`${end.toISOString().slice(0,10)}T23:59`};
+  }
+
+  async function fetchTides(){
+    const {from,to}=tideRange();
+    const common={lat:LAT,lon:LON,fromtime:from,totime:to,refcode:'cd',lang:'nb',dst:'1',tzone:'1',tide_request:'locationdata'};
+    const make=datatype=>{const p=new URLSearchParams({...common,datatype,interval:'60'});return `https://vannstand.kartverket.no/tideapi.php?${p.toString()}`;};
+    const [levelsRes,tableRes]=await Promise.all([fetch(make('all'),{cache:'no-store'}),fetch(make('tab'),{cache:'no-store'})]);
+    if(!levelsRes.ok||!tableRes.ok)throw new Error(`tidevann HTTP ${levelsRes.status}/${tableRes.status}`);
+    return {levels:await levelsRes.text(),table:await tableRes.text()};
+  }
+
+  function parseTideXml(text){
+    const doc=new DOMParser().parseFromString(text,'application/xml');
+    if(doc.querySelector('parsererror,error'))throw new Error(doc.querySelector('error')?.textContent||'ugyldig tidevannsdata');
+    return doc;
+  }
+
+  function tideTime(iso){
+    const date=new Date(iso);
+    if(Number.isNaN(date.getTime()))return '–';
+    const today=osloHourKey().slice(0,10);
+    const parts=new Intl.DateTimeFormat('sv-SE',{timeZone:'Europe/Oslo',year:'numeric',month:'2-digit',day:'2-digit'}).format(date);
+    const time=new Intl.DateTimeFormat('nb-NO',{timeZone:'Europe/Oslo',hour:'2-digit',minute:'2-digit'}).format(date);
+    if(parts===today)return `I dag ${time}`;
+    const tomorrowDate=new Date(today+'T12:00:00Z');tomorrowDate.setUTCDate(tomorrowDate.getUTCDate()+1);
+    if(parts===tomorrowDate.toISOString().slice(0,10))return `I morgen ${time}`;
+    const day=new Intl.DateTimeFormat('nb-NO',{timeZone:'Europe/Oslo',weekday:'short'}).format(date);
+    return `${day} ${time}`;
+  }
+
+  function renderTides(data){
+    const table=parseTideXml(data.table),levels=parseTideXml(data.levels),now=Date.now();
+    const events=[...table.querySelectorAll('waterlevel')].map(el=>({
+      value:Number(el.getAttribute('value')),time:el.getAttribute('time'),flag:(el.getAttribute('flag')||'').toLowerCase()
+    })).filter(x=>x.time&&new Date(x.time).getTime()>=now).sort((a,b)=>new Date(a.time)-new Date(b.time));
+    const high=events.find(x=>x.flag.includes('high')),low=events.find(x=>x.flag.includes('low'));
+    $('nextHigh').textContent=high?tideTime(high.time):'–';
+    $('nextLow').textContent=low?tideTime(low.time):'–';
+    const points=[...levels.querySelectorAll('data waterlevel')].map(el=>({
+      value:Number(el.getAttribute('value')),time:el.getAttribute('time'),type:el.parentElement?.getAttribute('type')||''
+    })).filter(x=>finite(x.value)&&x.time&&!/prediction/i.test(x.type));
+    const nearest=points.sort((a,b)=>Math.abs(new Date(a.time)-now)-Math.abs(new Date(b.time)-now))[0];
+    const location=levels.querySelector('location');
+    const source=location?.getAttribute('obsname')||location?.getAttribute('name')||'Kartverket';
+    const levelText=nearest?`Estimert vannstand nå: ${fmt(nearest.value,0)} cm`:'Vannstand over sjøkartnull';
+    $('tideDetail').textContent=`${levelText} · grunnlag: ${source}`;
   }
 
   async function fetchAlerts(){
@@ -1215,11 +1321,13 @@
       return;
     }
 
-    const [results, recentHistoryResult, localExtrasResult, alertsResult] = await Promise.all([
+    const [results,recentHistoryResult,localExtrasResult,alertsResult,marineResult,tidesResult]=await Promise.all([
       Promise.allSettled(MODELS.map(fetchModel)),
-      fetchRecentHistory().then(value => ({ok:true,value})).catch(error => ({ok:false,error})),
-      fetchLocalExtras().then(value => ({ok:true,value})).catch(error => ({ok:false,error})),
-      fetchAlerts().then(value => ({ok:true,value})).catch(error => ({ok:false,error}))
+      fetchRecentHistory().then(value=>({ok:true,value})).catch(error=>({ok:false,error})),
+      fetchLocalExtras().then(value=>({ok:true,value})).catch(error=>({ok:false,error})),
+      fetchAlerts().then(value=>({ok:true,value})).catch(error=>({ok:false,error})),
+      fetchMarine().then(value=>({ok:true,value})).catch(error=>({ok:false,error})),
+      fetchTides().then(value=>({ok:true,value})).catch(error=>({ok:false,error}))
     ]);
     const ok = [];
     const failed = [];
@@ -1241,7 +1349,11 @@
 
     renderLocalExtras(localExtrasResult.ok ? localExtrasResult.value : null);
     renderCurrent(times,models,recentHistoryResult.ok ? recentHistoryResult.value : null);
-    renderAlerts(alertsResult.ok ? alertsResult.value : null);
+    renderAlerts(alertsResult.ok?alertsResult.value:null);
+    if(marineResult.ok)renderMarine(marineResult.value);
+    if(tidesResult.ok)renderTides(tidesResult.value);
+    if(!marineResult.ok)$('marineCell').textContent='marindata utilgjengelig';
+    if(!tidesResult.ok)$('tideDetail').textContent='tidevannsdata utilgjengelig';
     formatSummaryCards();
     renderModelChips(models,failed,times);
 
@@ -1263,8 +1375,10 @@
     const suffix = failed.length ? ` · ${failed.length} modell${failed.length === 1 ? '' : 'er'} utilgjengelig` : '';
     const historySuffix = recentHistoryResult.ok ? '' : ' · nedbørshistorikk utilgjengelig';
     const localSuffix = localExtrasResult.ok ? '' : ' · lokale tilleggsdata utilgjengelige';
-    const alertSuffix = alertsResult.ok ? '' : ' · farevarsler utilgjengelige';
-    setStatus(`Oppdatert med ${models.length} værmodeller · Trykk på temperatur- eller vindboksen for å endre enhet${suffix}${historySuffix}${localSuffix}${alertSuffix}`,'ok');
+    const alertSuffix=alertsResult.ok?'':' · farevarsler utilgjengelige';
+    const marineSuffix=marineResult.ok?'':' · marindata utilgjengelige';
+    const tideSuffix=tidesResult.ok?'':' · tidevann utilgjengelig';
+    setStatus(`Oppdatert med ${models.length} værmodeller · Trykk på temperatur- eller vindboksen for å endre enhet${suffix}${historySuffix}${localSuffix}${alertSuffix}${marineSuffix}${tideSuffix}`,'ok');
     finishLoad();
   }
 
