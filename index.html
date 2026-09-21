@@ -197,7 +197,7 @@
   <header>
     <div>
       <h1>Dale - DidWell Weather Services</h1>
-      <div id="locationSub" class="sub">59,08103°N · 5,72075°E · høyde hentes · 7 døgn · v1.30 · oppdateres automatisk når siden åpnes</div>
+      <div id="locationSub" class="sub">59,08103°N · 5,72075°E · høyde hentes · 7 døgn · v1.31 · oppdateres automatisk når siden åpnes</div>
     </div>
     <div class="actions">
       <button id="refreshBtn" type="button">Oppdater</button>
@@ -334,6 +334,19 @@
     </div>
   </section>
   <div class="note">Bølgeverdiene kommer fra nærmeste tilgjengelige sjøcelle og kan avvike inne i skjermet skjærgård. Tidevann og vannstand er modellert av Kartverket for posisjonen. Dataene er veiledende og skal ikke brukes som eneste grunnlag for navigasjon.</div>
+
+  <section class="grid">
+    <div class="panel">
+      <h2>Bølgehøyde</h2>
+      <p>Signifikant bølgehøyde fra nærmeste tilgjengelige sjøcelle. Lokale bølger inne i skjærgården kan være lavere.</p>
+      <div class="chart-wrap"><canvas id="waveChart"></canvas></div>
+    </div>
+    <div class="panel">
+      <h2>Tidevann</h2>
+      <p>Astronomisk tidevann fra Kartverket, vist i centimeter over sjøkartnull. Værpåvirket vannstand kan avvike.</p>
+      <div class="chart-wrap"><canvas id="tideChart"></canvas></div>
+    </div>
+  </section>
 
   <section class="grid">
     <div class="panel">
@@ -682,7 +695,7 @@
 
     const elevation = Number(data.elevation);
     if(finite(elevation)){
-      $('locationSub').textContent = `59,08103°N · 5,72075°E · ${Math.round(elevation)} moh. · 7 døgn · v1.30 · oppdateres automatisk når siden åpnes`;
+      $('locationSub').textContent = `59,08103°N · 5,72075°E · ${Math.round(elevation)} moh. · 7 døgn · v1.31 · oppdateres automatisk når siden åpnes`;
     }
 
     const current = data.current || {};
@@ -801,6 +814,45 @@
     const source=location?.getAttribute('obsname')||location?.getAttribute('name')||'Kartverket';
     const levelText=nearest?`Estimert vannstand nå: ${fmt(nearest.value,0)} cm`:'Vannstand over sjøkartnull';
     $('tideDetail').textContent=`${levelText} · grunnlag: ${source}`;
+  }
+
+  function makeWaveChart(data){
+    destroyCanvasChart('waveChart');
+    const times=data?.hourly?.time||[],values=data?.hourly?.wave_height||[];
+    const options=baseOptions(times,'m',0,null);
+    options.plugins.tooltip.filter=()=>true;
+    const chart=new Chart($('waveChart'),{
+      type:'line',
+      data:{labels:times,datasets:[{
+        label:'Bølgehøyde',data:values,borderColor:'#78baff',backgroundColor:'rgba(120,186,255,.12)',
+        tooltipColor:'#78baff',pointRadius:0,borderWidth:2.5,tension:.16,spanGaps:true,fill:true
+      }]},
+      options
+    });
+    charts.push(chart);
+  }
+
+  function makeTideChart(data){
+    destroyCanvasChart('tideChart');
+    const doc=parseTideXml(data.levels);
+    const groups=[...doc.querySelectorAll('data')];
+    const prediction=groups.find(el=>(el.getAttribute('type')||'').toLowerCase()==='prediction');
+    const source=prediction||groups.find(el=>el.querySelector('waterlevel'));
+    const points=[...(source?.querySelectorAll('waterlevel')||[])].map(el=>({
+      time:el.getAttribute('time'),value:Number(el.getAttribute('value'))
+    })).filter(x=>x.time&&finite(x.value)).sort((a,b)=>new Date(a.time)-new Date(b.time));
+    const times=points.map(x=>x.time),values=points.map(x=>x.value);
+    const options=baseOptions(times,'cm',null,null);
+    options.plugins.tooltip.filter=()=>true;
+    const chart=new Chart($('tideChart'),{
+      type:'line',
+      data:{labels:times,datasets:[{
+        label:'Astronomisk tidevann',data:values,borderColor:'#5bd6ad',backgroundColor:'rgba(91,214,173,.10)',
+        tooltipColor:'#5bd6ad',pointRadius:0,borderWidth:2.5,tension:.28,spanGaps:true,fill:true
+      }]},
+      options
+    });
+    charts.push(chart);
   }
 
   async function fetchAlerts(){
@@ -931,7 +983,7 @@
     });
   }
 
-  const CHART_IDS = ['tempChart','precipChart','windChart','dirChart','rhChart','pressureChart'];
+  const CHART_IDS = ['tempChart','precipChart','windChart','dirChart','rhChart','pressureChart','waveChart','tideChart'];
 
   function destroyCanvasChart(id){
     const existing = Chart.getChart(id);
@@ -960,6 +1012,9 @@
     if(unit === '%') return `${v.toFixed(0)} %`;
     if(unit === 'm/s') return `${v.toFixed(1).replace('.',',')} m/s`;
     if(unit === 'mbar') return `${v.toFixed(1).replace('.',',')} mbar`;
+    if(unit === 'm') return `${v.toFixed(1).replace('.',',')} m`;
+    if(unit === 'cm') return `${v.toFixed(0)} cm`;
+    if(unit === 's') return `${v.toFixed(1).replace('.',',')} s`;
     return `${v.toFixed(1).replace('.',',')} °C`;
   }
 
@@ -1337,6 +1392,8 @@
       makeDirection(times,models);
       makeLine('rhChart',times,models,'rh','%',0,100);
       makeLine('pressureChart',times,models,'pressure','mbar');
+      if(marineResult.ok)makeWaveChart(marineResult.value);
+      if(tidesResult.ok)makeTideChart(tidesResult.value);
     }catch(e){
       console.error(e);
       showError(`Dataene er lastet, men grafene kunne ikke tegnes: ${e.message}`);
